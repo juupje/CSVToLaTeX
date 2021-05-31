@@ -1,3 +1,7 @@
+_pycache_/*
+test.tex
+*.csv
+
 ## Core latex/pdflatex auxiliary files:
 *.aux
 *.lof
