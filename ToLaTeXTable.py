@@ -11,6 +11,8 @@ def LaTeXTable(data, **kwargs):
         return MatrixToLaTeX(data, **kwargs)
     elif(type(data) is DataFrame):
         return DataFrameToLaTeX(data, **kwargs)
+    elif(type(data) is list):
+        return ListToLaTeX(data, **kwargs)
 
 class __ToLaTeX__:
     def __init__(self, ncols, headers=None):
@@ -20,6 +22,10 @@ class __ToLaTeX__:
         self.formatters = [str]*self.ncols
         self.headers = headers
         self.include_headers = (headers is not None)
+        self.keys["tabletype"] = "tabular"
+        
+    def set_longtable(self, val):
+        self.keys["tabletype"] = ("longtable" if val else "tabular")
         
     def set_include_headers(self, val):
         """
@@ -28,7 +34,7 @@ class __ToLaTeX__:
         """
         self.include_headers = val
     
-    def set_headers(self, headers, bold=False):
+    def set_headers(self, headers=None, bold=False):
         """
         Sets the headers of the table. This will automatically set `include_headers` to True.
         
@@ -49,6 +55,9 @@ class __ToLaTeX__:
         None.
 
         """
+        if(headers is None):
+            self.keys["bold"] = bold
+            return
         if(len(headers)==self.ncols):
             self.headers = headers
             self.include_headers = True
@@ -133,6 +142,24 @@ class __ToLaTeX__:
             self.set_column_lines("none")
         self.keys["clines"][idx] = line
     
+    def set_header_lines(self, lines):
+        """
+        Sets the horizontal lines of the header.
+
+        Parameters
+        ----------
+        lines : list of int, str
+            If given as a string, it can be one of 'below', 'above' or 'both', 
+            which will add a line below or above the header of both, respectively.
+            If given as a list of ints, these integers can be '0' for the line above or '1' for the line below the header.
+            Hint: for a line above and a double lines below the header, use `lines=[0,1,1]`
+        Returns
+        -------
+        None.
+
+        """
+        self.keys["hlines"] = lines
+    
     def set_row_lines(self, lines):
         """
         Sets the indices of the rows after which a separator line (`\hline`) should be added
@@ -196,8 +223,9 @@ class __ToLaTeX__:
 
         """
         self.formatters[idx] = formatter
-        
-    def __construct_headers__(self):
+    
+    def __get_lines__(self):
+        #columns
         if(self.columns is None):
             self.columns = ["c"]*self.ncols
             
@@ -212,7 +240,7 @@ class __ToLaTeX__:
             colstr = lines[0]
             for i in range(self.ncols):
                 colstr += self.columns[i]+lines[i+1]
-        headers = r"\begin{tabular}{"+colstr+"}" + "\n"
+        #rows
         all_lines = False
         rlines = []
         if("rlines" in self.keys):
@@ -222,14 +250,35 @@ class __ToLaTeX__:
             else:
                 rlines = self.keys["rlines"]
         else:
-            rlines = [10000000000] #yeah, bad programming, I know...
+            rlines = [np.infty]
+        return colstr, all_lines, rlines
+    
+    def __construct_headers__(self, colstr):
+        headers = r"\begin{"+self.keys["tabletype"]+"}{"+colstr+"}" + "\n"
+        
+        if("hlines" in self.keys):
+            hlines = self.keys["hlines"]
+            if(hlines == "above"): hlines=[0]
+            elif(hlines == "below"): hlines=[1]
+            elif(hlines == "both"): hlines=[0,1]
+            elif(isinstance(hlines, (tuple,list))):
+                pass #do nothing, hlines is already set
+            else:
+                raise ValueError("Unknown value for argument 'hlines'")
+        else:
+            hlines=[0,1]
+        idx = 0
         if(self.include_headers):
             if("bold" in self.keys and self.keys["bold"]):
-                self.headers = [r"\textbf{"+s+"}" for s in self.headers]
-            headers += "\\hline\n"
+                self.headers = [r"\textbf{"+str(s)+"}" for s in self.headers]
+            while(idx<len(hlines) and hlines[idx]==0):
+                headers += "\\hline\n"
+                idx += 1
             headers += " & ".join(self.headers) + "\\\\\n"
-            headers += "\\hline\n"
-        return all_lines, rlines, headers
+            while(idx<len(hlines) and hlines[idx]==1):
+                headers += "\\hline\n"
+                idx += 1
+        return headers
     
     def tolatex(self):
         pass #this has to be implemented by the other classes
@@ -282,7 +331,8 @@ class CSVToLaTeX(__ToLaTeX__):
             
     def tolatex(self, fname):
         ofile = open(fname, 'w')
-        all_lines, rlines, headers = self.__construct_headers__()
+        colstr, all_lines, rlines = self.__get_lines__()
+        headers = self.__construct_headers__(colstr)
         ofile.write(headers)
         endline = r"\\" + "\n"
         
@@ -293,14 +343,17 @@ class CSVToLaTeX(__ToLaTeX__):
             ofile.write(line + endline)
             if(all_lines):
                 ofile.write("\\hline\n")
-            elif(idx < len(rlines) and rownr == rlines[idx]):
-                idx += 1
-                ofile.write("\\hline\n")
+            else:
+                while(idx < len(rlines) and rownr == rlines[idx]):
+                    idx += 1
+                    ofile.write("\\hline\n")
             rownr += 1
-        if(rlines[-1]==-1):
+        idx = -1
+        while(rlines[-1]==-1):
             ofile.write("\\hline\n")
+            idx -= 1
             
-        ofile.write(r"\end{tabular}")
+        ofile.write(r"\end{"+self.keys["tabletype"]+"}")
         ofile.close()
     
     def close(self):
@@ -318,7 +371,8 @@ class MatrixToLaTeX(__ToLaTeX__):
     
     def tolatex(self, fname):
         ofile = open(fname, 'w')
-        all_lines, rlines, headers = self.__construct_headers__()
+        colstr, all_lines, rlines = self.__get_lines__()
+        headers = self.__construct_headers__(colstr)
         ofile.write(headers)
         endline = r"\\" + "\n"
         
@@ -329,18 +383,50 @@ class MatrixToLaTeX(__ToLaTeX__):
             ofile.write(line + endline)
             if(all_lines):
                 ofile.write("\\hline\n")
-            elif(idx < len(rlines) and rownr == rlines[idx]):
-                idx += 1
-                ofile.write("\\hline\n")
+            else:
+                while(idx < len(rlines) and rownr == rlines[idx]):
+                    idx += 1
+                    ofile.write("\\hline\n")
             rownr += 1
-        if(rlines[-1]==-1):
+        idx = -1
+        while(rlines[idx]==-1):
             ofile.write("\\hline\n")
+            idx -= 1
             
-        ofile.write(r"\end{tabular}")
+        ofile.write(r"\end{"+self.keys["tabletype"]+"}")
         ofile.close()
         
 class DataFrameToLaTeX(__ToLaTeX__):
+    """
+    Class providing functionalities to convert a Pandas DataFrame to a LaTeX table.
+    This class inherits all functionalities of `__ToLaTeX__` and adds the function
+    `set_index_formatter`: a setter for the formatter of the index of the dataframe.
+    """
     def __init__(self, df, include_headers=True, include_index=True, headers=None):
+        """
+        
+        
+        Parameters
+        ----------
+        df : DataFrame
+            the DataFrame to be converted.
+        include_headers : bool, optional
+            Whether or not the headers of the DataFrame should be included in the table. The default is True.
+        include_index : bool, optional
+            Whether or not the index of the DataFrame should be included in the table before the first column. The default is True.
+        headers : list of strings, optional
+            If provided, these overwrite the column names of the DataFrame as the table header. The default is None.
+
+        Raises
+        ------
+        ValueError
+            If the dataframe is not 2 dimensional or the length of `headers` does not match the number of columns
+
+        Returns
+        -------
+        None.
+
+        """
         if(df.ndim!=2):
             raise ValueError("Expected dataframe of dimension 2, got " + str(df.ndim))
         ncols = df.shape[1]
@@ -363,11 +449,25 @@ class DataFrameToLaTeX(__ToLaTeX__):
             self.index_formatter = str
         
     def set_index_formatter(self, fmt):
+        """
+        Sets the formatter of the index column
+
+        Parameters
+        ----------
+        fmt : lambda or function
+            the formatting function. It should take a single input (the index) and produce a string output.
+
+        Returns
+        -------
+        None.
+
+        """
         self.index_formatter = fmt
         
     def tolatex(self, fname):
         ofile = open(fname, 'w')
-        all_lines, rlines, headers = self.__construct_headers__()
+        colstr, all_lines, rlines = self.__get_lines__()
+        headers = self.__construct_headers__(colstr)
         ofile.write(headers)
         endline = r"\\" + "\n"
         
@@ -375,17 +475,85 @@ class DataFrameToLaTeX(__ToLaTeX__):
         idx = 0
         for row_idx in range(self.df.shape[0]):
             line = " & ".join([self.formatters[i](self.df.iloc[row_idx,i]) for i in range(self.df.shape[1])])
-            if(self.include_headers):
+            if(self.include_index):
                 line = self.index_formatter(self.df.index[row_idx]) + " & " + line
             ofile.write(line + endline)
             if(all_lines):
                 ofile.write("\\hline\n")
-            elif(idx < len(rlines) and rownr == rlines[idx]):
-                idx += 1
-                ofile.write("\\hline\n")
+            else:
+                while(idx < len(rlines) and rownr == rlines[idx]):
+                    idx += 1
+                    ofile.write("\\hline\n")
             rownr += 1
-        if(rlines[-1]==-1):
+        idx = -1
+        while(rlines[idx]==-1):
             ofile.write("\\hline\n")
+            idx -= 1
             
-        ofile.write(r"\end{tabular}")
+        ofile.write(r"\end{"+self.keys["tabletype"]+"}")
+        ofile.close()
+        
+class ListToLaTeX(__ToLaTeX__):
+    """
+    Class providing functionalities to convert a list of lists to a LaTeX table.
+    This class inherits all functionalities of `__ToLaTeX__`.
+    """
+    def __init__(self, data, ncols, has_headers=True, headers=None):
+        """
+        Parameters
+        ----------
+        data : list of lists
+            a list of the data rows
+        ncols : int
+            number of columns
+        include_headers : bool, optional
+            Whether or not the first row should be interpreted as a header
+        headers : list of strings, optional
+            Sets the headers of the table, if provided. The default is None.
+        Returns
+        -------
+        None.
+
+        """
+        if(type(data) is not list):
+            raise ValueError("Expected data fo be a list")
+        self.idx = 0
+        if(headers is None):    
+            if(has_headers):
+                headers = data[0]
+                self.idx = 1
+        if(headers is not None):
+            if(len(headers)!=ncols):
+                raise ValueError("Number of given headers does not match number of columns")
+        super().__init__(ncols, headers)
+        self.data = data
+        
+    def tolatex(self, fname):
+        ofile = open(fname, 'w')
+        colstr, all_lines, rlines = self.__get_lines__()
+        headers = self.__construct_headers__(colstr)
+        ofile.write(headers)
+        endline = r"\\" + "\n"
+        
+        if(self.idx==1): self.data = self.data[1:]
+        rownr = 0
+        idx = 0
+        for row in self.data:
+            line = " & ".join([self.formatters[i](row[i]) for i in range(min(self.ncols, len(row)))])
+            if(len(row)<self.ncols):
+                line += " & "*(self.ncols-len(row))
+            ofile.write(line + endline)
+            if(all_lines):
+                ofile.write("\\hline\n")
+            else:
+                while(idx < len(rlines) and rownr == rlines[idx]):
+                    idx += 1
+                    ofile.write("\\hline\n")
+            rownr += 1
+        idx = -1
+        while(rlines[idx]==-1):
+            ofile.write("\\hline\n")
+            idx -= 1
+            
+        ofile.write(r"\end{"+self.keys["tabletype"]+"}")
         ofile.close()
